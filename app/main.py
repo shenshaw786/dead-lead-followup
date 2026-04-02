@@ -24,16 +24,11 @@ from app.slack_handler import router as slack_router
 from app.state import pending_approvals
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
-# Create logs directory if it doesn't exist
-os.makedirs("logs", exist_ok=True)
-
+# Use stdout logging only (Railway captures stdout natively)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("logs/automation.log"),
-    ],
+    handlers=[logging.StreamHandler()],
 )
 logger = logging.getLogger(__name__)
 
@@ -149,4 +144,3 @@ async def trigger_job_manually():
 async def get_pending_approvals():
     """View currently pending Slack approvals."""
     return {"pending_count": len(pending_approvals), "leads": list(pending_approvals.keys())}
-# Railway deployment fix - logs dir creation before logging setup
