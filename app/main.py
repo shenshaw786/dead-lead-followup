@@ -149,3 +149,4 @@ async def trigger_job_manually():
 async def get_pending_approvals():
     """View currently pending Slack approvals."""
     return {"pending_count": len(pending_approvals), "leads": list(pending_approvals.keys())}
+# Railway deployment fix - logs dir creation before logging setup
