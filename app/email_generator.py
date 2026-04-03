@@ -14,7 +14,16 @@ from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
-client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+_client: Optional[AsyncOpenAI] = None
+
+def _get_client() -> AsyncOpenAI:
+    global _client
+    if _client is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY environment variable is not set")
+        _client = AsyncOpenAI(api_key=api_key)
+    return _client
 
 SYSTEM_PROMPT = """You are a world-class sales copywriter specializing in re-engagement emails for high-ticket coaching and consulting businesses. 
 
@@ -185,7 +194,7 @@ SUBJECT: [subject line]
     messages.append({"role": "user", "content": user_content})
 
     try:
-        response = await client.chat.completions.create(
+        response = await _get_client().chat.completions.create(
             model=model,
             messages=messages,
             temperature=0.7,
@@ -258,7 +267,7 @@ SUBJECT: [subject line]
 [email body]"""
 
     try:
-        response = await client.chat.completions.create(
+        response = await _get_client().chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
