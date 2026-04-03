@@ -20,7 +20,7 @@ def _get_slack_client() -> AsyncWebClient:
     return AsyncWebClient(token=os.getenv("SLACK_BOT_TOKEN"))
 
 
-async def post_draft_for_approval(lead: Dict[str, Any], draft: Dict[str, str], calendly_context: Dict[str, Any] = None) -> str:
+async def post_draft_for_approval(lead: Dict[str, Any], draft: Dict[str, str], calendly_context: Dict[str, Any] = None, flow: str = "cold_lead") -> str:
     """
     Posts an email draft to the configured Slack channel with interactive buttons.
 
@@ -44,6 +44,11 @@ async def post_draft_for_approval(lead: Dict[str, Any], draft: Dict[str, str], c
         "other": "🔄 Dead Lead",
     }
     type_label = type_labels.get(lead_type, "🔄 Dead Lead")
+    flow_labels = {
+        "cold_lead": "🔴 Flow 1: 30-Day Cold Lead",
+        "typeform_noshowup": "📋 Flow 2: Typeform No-Show",
+    }
+    flow_label = flow_labels.get(flow, "🔄 Follow-Up")
     transcript_badge = "🎙️ Fireflies transcript used" if has_transcript else "📝 No transcript found"
 
     # Calendly call status badge

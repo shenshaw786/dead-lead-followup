@@ -231,3 +231,45 @@ def _parse_email_output(raw: str) -> Dict[str, str]:
         "body": body,
         "full_draft": f"Subject: {subject}\n\n{body}",
     }
+
+# ─── Typeform No-Show Email Generator ────────────────────────────────────────
+async def generate_typeform_nudge(
+    lead: Dict[str, Any],
+    calendly_booking_link: str = "https://calendly.com/viralgrowth",
+) -> Dict[str, str]:
+    """Generate a simple nudge email for Typeform applicants who didn't book."""
+    first_name = lead.get("first_name") or (lead.get("name", "").split()[0] if lead.get("name") else "there")
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+    prompt = f"""You are Simon, a sales professional at Viral Growth, a digital marketing agency.
+
+Write a short, friendly follow-up email to {first_name} who filled out our application form but hasn't booked a discovery call yet.
+
+INSTRUCTIONS:
+1. Keep it very short (under 100 words)
+2. Be friendly and helpful, not pushy
+3. Remind them they can book a call easily
+4. Include the booking link: {calendly_booking_link}
+5. Sound human and conversational
+6. Sign off as Simon
+
+Return ONLY the email in this exact format:
+SUBJECT: [subject line]
+[email body]"""
+
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=300,
+        )
+        raw_output = response.choices[0].message.content.strip()
+        return _parse_email_output(raw_output)
+    except Exception as e:
+        logger.error(f"OpenAI nudge generation error: {e}")
+        return {
+            "subject": f"Quick question, {first_name}",
+            "body": f"Hi {first_name},\n\nI noticed you filled out our application but haven't booked a call yet. I'd love to connect!\n\nYou can grab a time here: {calendly_booking_link}\n\nLooking forward to chatting!\n\nBest,\nSimon",
+            "full_draft": f"Subject: Quick question, {first_name}\n\nHi {first_name},\n\nI noticed you filled out our application but haven't booked a call yet.\n\nGrab a time here: {calendly_booking_link}\n\nBest,\nSimon",
+        }

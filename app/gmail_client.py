@@ -1,95 +1,51 @@
 """
 Gmail API Client
-Sends emails via the Gmail API using OAuth 2.0 credentials.
-Supports Google Workspace accounts.
-
-Authentication Setup:
-1. Go to Google Cloud Console (console.cloud.google.com)
-2. Create a project and enable the Gmail API
-3. Create OAuth 2.0 credentials (Desktop App type)
-4. Download credentials.json and place it in the project root
-5. On first run, the app will open a browser for authorization
-6. The token will be saved to token.json for future use
+Sends emails via the Gmail API using OAuth 2.0 refresh token.
+Uses environment variables for credentials (no file-based auth needed).
 """
 import base64
 import logging
 import os
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from pathlib import Path
 from typing import Optional
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
+import requests
 
 logger = logging.getLogger(__name__)
 
-# Gmail API scopes required
-SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
-
-# Token storage path
-TOKEN_PATH = Path("data/gmail_token.json")
-CREDENTIALS_PATH = Path(os.getenv("GMAIL_CREDENTIALS_FILE", "credentials.json"))
+GMAIL_CLIENT_ID = os.getenv("GMAIL_CLIENT_ID")
+GMAIL_CLIENT_SECRET = os.getenv("GMAIL_CLIENT_SECRET")
+GMAIL_REFRESH_TOKEN = os.getenv("GMAIL_REFRESH_TOKEN")
+GMAIL_SENDER_EMAIL = os.getenv("GMAIL_SENDER_EMAIL", "simon@viralgrowth.io")
 
 
-def _get_gmail_service():
-    """
-    Authenticates with the Gmail API and returns a service object.
-    Uses stored token if available, otherwise initiates OAuth flow.
-    """
-    creds = None
-
-    # Load existing token if available
-    if TOKEN_PATH.exists():
-        creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
-
-    # Refresh or re-authenticate if needed
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            logger.info("Refreshing Gmail OAuth token...")
-            creds.refresh(Request())
-        else:
-            if not CREDENTIALS_PATH.exists():
-                raise FileNotFoundError(
-                    f"Gmail credentials file not found at: {CREDENTIALS_PATH}\n"
-                    "Please download credentials.json from Google Cloud Console and place it in the project root."
-                )
-            logger.info("Initiating Gmail OAuth flow...")
-            flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_PATH), SCOPES)
-            creds = flow.run_local_server(port=0)
-
-        # Save the token for future use
-        TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-        TOKEN_PATH.write_text(creds.to_json())
-        logger.info(f"Gmail token saved to {TOKEN_PATH}")
-
-    return build("gmail", "v1", credentials=creds)
+def _get_access_token() -> str:
+    """Get a fresh Gmail access token using the refresh token."""
+    resp = requests.post(
+        "https://oauth2.googleapis.com/token",
+        data={
+            "client_id": GMAIL_CLIENT_ID,
+            "client_secret": GMAIL_CLIENT_SECRET,
+            "refresh_token": GMAIL_REFRESH_TOKEN,
+            "grant_type": "refresh_token",
+        },
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json()["access_token"]
 
 
-def _create_message(
-    sender: str,
-    to_email: str,
-    to_name: str,
-    subject: str,
-    body: str,
-) -> dict:
-    """
-    Creates a Gmail API message object from email components.
-    Sends as plain text with proper formatting.
-    """
+def _create_message(sender: str, to_email: str, to_name: str, subject: str, body: str) -> dict:
+    """Creates a Gmail API message object from email components."""
     message = MIMEMultipart("alternative")
     message["Subject"] = subject
     message["From"] = sender
     message["To"] = f"{to_name} <{to_email}>" if to_name else to_email
 
-    # Plain text part
     text_part = MIMEText(body, "plain", "utf-8")
     message.attach(text_part)
 
-    # HTML part (convert line breaks to <br> for better rendering)
     html_body = body.replace("\n", "<br>")
     html_part = MIMEText(f"<html><body><p>{html_body}</p></body></html>", "html", "utf-8")
     message.attach(html_part)
@@ -105,20 +61,8 @@ async def send_email(
     body: str,
     sender_email: Optional[str] = None,
 ) -> dict:
-    """
-    Sends an email via the Gmail API.
-
-    Args:
-        to_email: Recipient email address
-        to_name: Recipient display name
-        subject: Email subject line
-        body: Plain text email body
-        sender_email: Override sender email (defaults to GMAIL_SENDER_EMAIL env var)
-
-    Returns:
-        Gmail API response dict with message ID
-    """
-    sender = sender_email or os.getenv("GMAIL_SENDER_EMAIL", "me")
+    """Sends an email via the Gmail API using refresh token auth."""
+    sender = sender_email or GMAIL_SENDER_EMAIL
 
     if not to_email:
         raise ValueError("Recipient email address is required.")
@@ -126,38 +70,80 @@ async def send_email(
     logger.info(f"Sending email to {to_name} <{to_email}> — Subject: {subject}")
 
     try:
-        service = _get_gmail_service()
+        access_token = _get_access_token()
         message = _create_message(sender, to_email, to_name, subject, body)
 
-        result = service.users().messages().send(
-            userId="me",
-            body=message,
-        ).execute()
-
-        message_id = result.get("id")
-        logger.info(f"Email sent successfully. Gmail Message ID: {message_id}")
+        resp = requests.post(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            json=message,
+            timeout=20,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        logger.info(f"Email sent successfully. Gmail Message ID: {result.get('id')}")
         return result
 
-    except HttpError as e:
-        logger.error(f"Gmail API HttpError: {e.status_code} — {e.reason}")
-        raise
-    except FileNotFoundError as e:
-        logger.error(str(e))
-        raise
     except Exception as e:
-        logger.error(f"Unexpected error sending email: {e}", exc_info=True)
+        logger.error(f"Error sending email to {to_email}: {e}", exc_info=True)
         raise
+
+
+async def fetch_gmail_history(email: str, max_results: int = 5) -> dict:
+    """Fetch recent email thread history with a contact."""
+    try:
+        access_token = _get_access_token()
+        headers = {"Authorization": f"Bearer {access_token}"}
+
+        resp = requests.get(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+            headers=headers,
+            params={"q": f"from:{email} OR to:{email}", "maxResults": max_results},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        messages = resp.json().get("messages", [])
+
+        if not messages:
+            return {"message_count": 0, "history": []}
+
+        history_parts = []
+        for msg in messages[:3]:
+            msg_resp = requests.get(
+                f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg['id']}",
+                headers=headers,
+                params={"format": "metadata", "metadataHeaders": ["Subject", "From", "Date"]},
+                timeout=10,
+            )
+            if msg_resp.status_code == 200:
+                msg_data = msg_resp.json()
+                headers_list = msg_data.get("payload", {}).get("headers", [])
+                h = {h["name"]: h["value"] for h in headers_list}
+                history_parts.append(
+                    f"- {h.get('Date', '')}: {h.get('Subject', '(no subject)')} (from {h.get('From', '')})"
+                )
+
+        return {"message_count": len(messages), "history": history_parts}
+
+    except Exception as e:
+        logger.error(f"Gmail history error for {email}: {e}")
+        return {"message_count": 0, "history": []}
 
 
 async def verify_gmail_connection() -> bool:
-    """
-    Verifies that the Gmail API connection is working by fetching the user's profile.
-    Returns True if successful, False otherwise.
-    """
+    """Verifies that the Gmail API connection is working."""
     try:
-        service = _get_gmail_service()
-        profile = service.users().getProfile(userId="me").execute()
-        email = profile.get("emailAddress", "unknown")
+        access_token = _get_access_token()
+        resp = requests.get(
+            "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        email = resp.json().get("emailAddress", "unknown")
         logger.info(f"Gmail connection verified. Sending as: {email}")
         return True
     except Exception as e:
